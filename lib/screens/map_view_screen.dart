@@ -2,10 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' as latlng;
-import 'package:pocketbase/pocketbase.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:math';
 import '../theme_provider.dart';
-import 'restaurant_detail_screen.dart';
+import '../models/danusin_user.dart';
+import '../services/pocketbase_service.dart';
+import 'danuser_detail_screen.dart';
 import '../widgets/bottom_navigation_bar.dart';
 
 class MapViewScreen extends StatefulWidget {
@@ -16,110 +19,113 @@ class MapViewScreen extends StatefulWidget {
 }
 
 class _MapViewScreenState extends State<MapViewScreen> {
-  String _selectedCategory = 'BURGERS';
-  final List<String> _categories = ['BURGERS', 'BRUNCH', 'BREAKFAST'];
+  String _selectedCategory = 'ALL';
+  final List<String> _categories = ['ALL', 'VERIFIED', 'NEARBY', 'POPULAR'];
+  
+  // Search functionality
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  bool _isSearching = false;
+  List<DanusinUser> _searchResults = [];
 
   // Map controller
   final MapController _mapController = MapController();
 
-  // Default center (Perth, Australia)
-  static const latlng.LatLng _perthLocation = latlng.LatLng(-31.9523, 115.8613);
+  // Default center (Surabaya, Indonesia)
+  static const latlng.LatLng _defaultLocation = latlng.LatLng(-7.2575, 112.7521);
 
   // Markers
   final List<Marker> _markers = [];
 
-  // Selected restaurant ID
-  String? _selectedRestaurantId;
+  // Selected danuser ID
+  String? _selectedDanuserId;
 
-  // PocketBase instance
-  final pb = PocketBase('https://pocketbase.evoptech.com');
+  // Danusers data
+  List<DanusinUser> _danusers = [];
+  bool _isLoading = true;
+  String? _errorMessage;
 
-  // Mock restaurant data
-  final List<Map<String, dynamic>> _restaurants = [
-    {
-      'id': 'r1',
-      'name': 'Nethai Kitchen',
-      'rating': 4.5,
-      'deliveryTime': '30min',
-      'freeDelivery': true,
-      'cuisines': ['Thai', 'Asian'],
-      'location': latlng.LatLng(-31.9513, 115.8573),
-      'address': '123 Hay Street, Perth',
-    },
-    {
-      'id': 'r2',
-      'name': 'Lazy Bear',
-      'image': 'assets/images/lazy_bear.jpg',
-      'rating': 4.5,
-      'deliveryTime': '25min',
-      'freeDelivery': true,
-      'cuisines': ['Cafe', 'Brunch'],
-      'location': latlng.LatLng(-31.9533, 115.8633),
-      'address': '456 Murray Street, Perth',
-    },
-    {
-      'id': 'r3',
-      'name': 'Burger Palace',
-      'image': 'assets/images/mcdonalds.jpg',
-      'rating': 4.2,
-      'deliveryTime': '20min',
-      'freeDelivery': true,
-      'cuisines': ['Burgers', 'American'],
-      'location': latlng.LatLng(-31.9553, 115.8593),
-      'address': '789 Wellington Street, Perth',
-    },
-    {
-      'id': 'r4',
-      'name': 'Mario Italiano',
-      'image': 'assets/images/cafe.jpg',
-      'rating': 4.7,
-      'deliveryTime': '35min',
-      'freeDelivery': true,
-      'cuisines': ['Italian', 'Pizza'],
-      'location': latlng.LatLng(-31.9503, 115.8653),
-      'address': '321 St Georges Terrace, Perth',
-    },
-  ];
-
-  // User data from PocketBase
-  List<Map<String, dynamic>> _users = [];
+  // Current user location
+  latlng.LatLng? _currentLocation;
 
   @override
   void initState() {
     super.initState();
-    _fetchUsers();
-    _createMarkers();
+    _fetchDanusers();
     _updateUserLocation();
+    
+    // Add search listener
+    _searchController.addListener(() {
+      if (_searchController.text.isEmpty) {
+        setState(() {
+          _isSearching = false;
+          _searchResults.clear();
+        });
+        _createMarkers();
+      }
+    });
   }
 
-  // Fetch users from PocketBase
-  Future<void> _fetchUsers() async {
+  @override
+  void dispose() {
+    _searchController.dispose();
+    _searchFocusNode.dispose();
+    super.dispose();
+  }
+
+  // Fetch danusers from PocketBase
+  Future<void> _fetchDanusers() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
     try {
-      final result = await pb.collection('danusin_users').getList(
-        page: 1,
-        perPage: 100,
-        filter: 'location != null',
+      _danusers = await PocketBaseService.getUsers(
+        filter: 'isdanuser = true',
+        sort: '-created',
       );
+      
+      _createMarkers();
       setState(() {
-        _users = result.items.map((record) {
-          final location = record.data['location'] as Map<String, dynamic>?;
-          return {
-            'id': record.id,
-            'username': record.data['username'],
-            'location': location != null
-                ? latlng.LatLng(location['lat'] as double, location['lon'] as double)
-                : null,
-          };
-        }) .where((user) => user['location'] != null)
-            .toList();
-        _createMarkers();
+        _isLoading = false;
       });
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load user locations: $e')),
-        );
-      }
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Failed to load danusers: $e';
+      });
+    }
+  }
+
+  // Search danusers
+  Future<void> _searchDanusers(String query) async {
+    if (query.isEmpty) {
+      setState(() {
+        _isSearching = false;
+        _searchResults.clear();
+      });
+      _createMarkers();
+      return;
+    }
+
+    setState(() {
+      _isSearching = true;
+    });
+
+    try {
+      final results = await PocketBaseService.searchDanusers(query);
+      setState(() {
+        _searchResults = results;
+      });
+      _createMarkersFromResults(results);
+    } catch (e) {
+      setState(() {
+        _searchResults = [];
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Search failed: $e')),
+      );
     }
   }
 
@@ -139,104 +145,181 @@ class _MapViewScreenState extends State<MapViewScreen> {
         desiredAccuracy: LocationAccuracy.high,
       );
 
-      // Update user location in PocketBase (assuming user is authenticated)
-      if (pb.authStore.isValid) {
-        final body = <String, dynamic>{
-          'location': {
-            'lat': position.latitude,
-            'lon': position.longitude,
-          },
-        };
-        await pb.collection('danusin_users').update(
-          pb.authStore.model.id,
-          body: body,
-        );
-        _fetchUsers(); // Refresh user markers
+      setState(() {
+        _currentLocation = latlng.LatLng(position.latitude, position.longitude);
+      });
+
+      // Update user location in PocketBase (if authenticated)
+      if (PocketBaseService.isAuthenticated) {
+        final currentUser = PocketBaseService.currentUser;
+        if (currentUser != null) {
+          final body = <String, dynamic>{
+            'location': {
+              'lat': position.latitude,
+              'lon': position.longitude,
+            },
+          };
+          await PocketBaseService.updateUser(currentUser.id, body);
+        }
       }
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to update location: $e')),
-        );
-      }
+      debugPrint('Failed to update location: $e');
     }
   }
 
-  // Create markers for restaurants and users
+  // Create markers for danusers
   void _createMarkers() {
     _markers.clear();
 
-    // Restaurant markers
-    for (final restaurant in _restaurants) {
-      final markerId = restaurant['id'] as String;
-      final markerPosition = restaurant['location'] as latlng.LatLng;
+    final danusersToShow = _isSearching ? _searchResults : _filteredDanusers;
 
-      _markers.add(
-        Marker(
-          point: markerPosition,
-          width: 40,
-          height: 40,
-          child: GestureDetector(
-            onTap: () => _selectRestaurant(markerId),
-            child: Icon(
-              Icons.restaurant,
-              color: _selectedRestaurantId == markerId ? Colors.green : Colors.red,
-              size: 40,
+    for (final danuser in danusersToShow) {
+      if (danuser.location != null) {
+        final markerId = danuser.id;
+        final markerPosition = latlng.LatLng(danuser.location!.lat, danuser.location!.lon);
+
+        _markers.add(
+          Marker(
+            point: markerPosition,
+            width: 40,
+            height: 40,
+            child: GestureDetector(
+              onTap: () => _selectDanuser(markerId),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _selectedDanuserId == markerId 
+                      ? const Color(0xFF00704A) 
+                      : Colors.blue,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                ),
+                child: const Icon(
+                  Icons.person,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
             ),
           ),
-        ),
-      );
+        );
+      }
     }
 
-    // User markers
-    for (final user in _users) {
-      final markerId = user['id'] as String;
-      final markerPosition = user['location'] as latlng.LatLng;
-
+    // Add current location marker if available
+    if (_currentLocation != null) {
       _markers.add(
         Marker(
-          point: markerPosition,
+          point: _currentLocation!,
           width: 40,
           height: 40,
-          child: GestureDetector(
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('User: ${user['username']}')),
-              );
-            },
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.red,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+            ),
             child: const Icon(
-              Icons.person_pin_circle,
-              color: Colors.blue,
-              size: 40,
+              Icons.my_location,
+              color: Colors.white,
+              size: 20,
             ),
           ),
         ),
       );
     }
+
+    setState(() {});
   }
 
-  // Select a restaurant and update its marker
-  void _selectRestaurant(String restaurantId) {
-    setState(() {
-      _selectedRestaurantId = restaurantId;
+  // Create markers from search results
+  void _createMarkersFromResults(List<DanusinUser> results) {
+    _markers.clear();
 
-      final selectedRestaurantIndex = _restaurants.indexWhere(
-        (restaurant) => restaurant['id'] == restaurantId,
+    for (final danuser in results) {
+      if (danuser.location != null) {
+        final markerId = danuser.id;
+        final markerPosition = latlng.LatLng(danuser.location!.lat, danuser.location!.lon);
+
+        _markers.add(
+          Marker(
+            point: markerPosition,
+            width: 40,
+            height: 40,
+            child: GestureDetector(
+              onTap: () => _selectDanuser(markerId),
+              child: Container(
+                decoration: BoxDecoration(
+                  color: _selectedDanuserId == markerId 
+                      ? const Color(0xFF00704A) 
+                      : Colors.orange,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 2),
+                ),
+                child: const Icon(
+                  Icons.person,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+            ),
+          ),
+        );
+      }
+    }
+
+    // Add current location marker if available
+    if (_currentLocation != null) {
+      _markers.add(
+        Marker(
+          point: _currentLocation!,
+          width: 40,
+          height: 40,
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.red,
+              shape: BoxShape.circle,
+              border: Border.all(color: Colors.white, width: 2),
+            ),
+            child: const Icon(
+              Icons.my_location,
+              color: Colors.white,
+              size: 20,
+            ),
+          ),
+        ),
+      );
+    }
+
+    setState(() {});
+  }
+
+  // Select a danuser and update its marker
+  void _selectDanuser(String danuserId) {
+    setState(() {
+      _selectedDanuserId = danuserId;
+
+      final danusersToShow = _isSearching ? _searchResults : _filteredDanusers;
+      final selectedDanuserIndex = danusersToShow.indexWhere(
+        (danuser) => danuser.id == danuserId,
       );
 
-      if (selectedRestaurantIndex != -1) {
+      if (selectedDanuserIndex != -1) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
-          _scrollToRestaurant(selectedRestaurantIndex);
+          _scrollToDanuser(selectedDanuserIndex);
         });
       }
 
-      _createMarkers();
+      if (_isSearching) {
+        _createMarkersFromResults(_searchResults);
+      } else {
+        _createMarkers();
+      }
     });
   }
 
-  // Scroll to a restaurant in the list
+  // Scroll to a danuser in the list
   final ScrollController _scrollController = ScrollController();
-  void _scrollToRestaurant(int index) {
+  void _scrollToDanuser(int index) {
     if (_scrollController.hasClients) {
       final itemHeight = 116.0;
       _scrollController.animateTo(
@@ -247,30 +330,76 @@ class _MapViewScreenState extends State<MapViewScreen> {
     }
   }
 
-  // Filter restaurants by category
-  List<Map<String, dynamic>> get _filteredRestaurants {
-    if (_selectedCategory == 'ALL') {
-      return _restaurants;
-    }
-
+  // Filter danusers by category
+  List<DanusinUser> get _filteredDanusers {
     switch (_selectedCategory) {
-      case 'BURGERS':
-        return _restaurants
-            .where((r) => (r['cuisines'] as List<String>)
-                .containsAny(['Burgers', 'American']))
-            .toList();
-      case 'BRUNCH':
-        return _restaurants
-            .where((r) =>
-                (r['cuisines'] as List<String>).containsAny(['Cafe', 'Brunch']))
-            .toList();
-      case 'BREAKFAST':
-        return _restaurants
-            .where((r) =>
-                (r['cuisines'] as List<String>).containsAny(['Cafe', 'Brunch']))
-            .toList();
+      case 'VERIFIED':
+        return _danusers.where((d) => d.verified).toList();
+      case 'NEARBY':
+        if (_currentLocation == null) return _danusers;
+        // Sort by distance from current location
+        final danusersWithDistance = _danusers.where((d) => d.location != null).map((danuser) {
+          final distance = _calculateDistance(
+            _currentLocation!.latitude, _currentLocation!.longitude,
+            danuser.location!.lat, danuser.location!.lon,
+          );
+          return {'danuser': danuser, 'distance': distance};
+        }).toList();
+        
+        danusersWithDistance.sort((a, b) => (a['distance'] as double).compareTo(b['distance'] as double));
+        return danusersWithDistance.map((item) => item['danuser'] as DanusinUser).toList();
+      case 'POPULAR':
+        // For demo purposes, return all. In real app, sort by popularity/rating
+        return _danusers;
       default:
-        return _restaurants;
+        return _danusers;
+    }
+  }
+
+  // Calculate distance between two points
+  double _calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const double earthRadius = 6371; // Earth's radius in kilometers
+    
+    final double dLat = _degreesToRadians(lat2 - lat1);
+    final double dLon = _degreesToRadians(lon2 - lon1);
+    final double a = 
+        sin(dLat / 2) * sin(dLat / 2) +
+        cos(_degreesToRadians(lat1)) * cos(_degreesToRadians(lat2)) *
+        sin(dLon / 2) * sin(dLon / 2);
+    
+    final double c = 2 * asin(sqrt(a));
+    
+    return earthRadius * c;
+    return earthRadius * c;
+  }
+
+  double _degreesToRadians(double degrees) {
+    return degrees * (3.14159265359 / 180);
+  }
+
+  // Contact danuser via WhatsApp
+  Future<void> _contactDanuser(DanusinUser danuser) async {
+    if (danuser.phone != null && danuser.phone!.isNotEmpty) {
+      final phoneNumber = danuser.phone!.replaceAll(RegExp(r'[^\d+]'), '');
+      final whatsappUrl = 'https://wa.me/$phoneNumber?text=Hi ${danuser.name}, I found you on Danusin app!';
+      
+      try {
+        if (await canLaunchUrl(Uri.parse(whatsappUrl))) {
+          await launchUrl(Uri.parse(whatsappUrl), mode: LaunchMode.externalApplication);
+        } else {
+          throw 'Could not launch WhatsApp';
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not open WhatsApp: $e')),
+          );
+        }
+      }
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Phone number not available')),
+      );
     }
   }
 
@@ -289,7 +418,7 @@ class _MapViewScreenState extends State<MapViewScreen> {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          'Top Pick Danuser',
+          'Find Danusers',
           style: TextStyle(
             color: themeProvider.getTextColor(),
             fontWeight: FontWeight.bold,
@@ -297,179 +426,238 @@ class _MapViewScreenState extends State<MapViewScreen> {
         ),
         centerTitle: true,
       ),
-      body: Column(
-        children: [
-          // OpenStreetMap view
-          SizedBox(
-            height: MediaQuery.of(context).size.height * 0.4,
-            child: Stack(
-              children: [
-                FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter: _perthLocation,
-                    initialZoom: 14,
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _errorMessage != null
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        _errorMessage!,
+                        style: TextStyle(color: themeProvider.getTextColor()),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: _fetchDanusers,
+                        child: const Text('Retry'),
+                      ),
+                    ],
                   ),
+                )
+              : Column(
                   children: [
-                    TileLayer(
-                      urlTemplate:
-                          'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
-                      subdomains: ['a', 'b', 'c'],
-                      userAgentPackageName: 'com.example.app',
-                      additionalOptions: themeProvider.isDarkMode
-                          ? {
-                              'tileProvider': 'CartoDB.DarkMatter',
-                              'urlTemplate':
-                                  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
-                            }
-                          : {},
+                    // Search bar
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: TextField(
+                        controller: _searchController,
+                        focusNode: _searchFocusNode,
+                        decoration: InputDecoration(
+                          hintText: 'Search danusers...',
+                          hintStyle: TextStyle(color: themeProvider.getSecondaryTextColor()),
+                          prefixIcon: Icon(
+                            Icons.search,
+                            color: themeProvider.getSecondaryTextColor(),
+                          ),
+                          suffixIcon: _searchController.text.isNotEmpty
+                              ? IconButton(
+                                  icon: Icon(
+                                    Icons.clear,
+                                    color: themeProvider.getSecondaryTextColor(),
+                                  ),
+                                  onPressed: () {
+                                    _searchController.clear();
+                                    setState(() {
+                                      _isSearching = false;
+                                      _searchResults.clear();
+                                    });
+                                    _createMarkers();
+                                  },
+                                )
+                              : null,
+                          filled: true,
+                          fillColor: themeProvider.isDarkMode ? Colors.grey[800] : Colors.grey[100],
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(12),
+                            borderSide: BorderSide.none,
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(
+                            horizontal: 16,
+                            vertical: 12,
+                          ),
+                        ),
+                        onSubmitted: _searchDanusers,
+                        onChanged: (value) {
+                          if (value.isEmpty) {
+                            setState(() {
+                              _isSearching = false;
+                              _searchResults.clear();
+                            });
+                            _createMarkers();
+                          }
+                        },
+                      ),
                     ),
-                    MarkerLayer(markers: _markers),
+                    // Map view
+                    SizedBox(
+                      height: MediaQuery.of(context).size.height * 0.4,
+                      child: Stack(
+                        children: [
+                          FlutterMap(
+                            mapController: _mapController,
+                            options: MapOptions(
+                              initialCenter: _currentLocation ?? _defaultLocation,
+                              initialZoom: 12,
+                            ),
+                            children: [
+                              TileLayer(
+                                urlTemplate: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                                subdomains: ['a', 'b', 'c'],
+                                userAgentPackageName: 'com.danusin.app',
+                              ),
+                              MarkerLayer(markers: _markers),
+                            ],
+                          ),
+                          // My location button
+                          Positioned(
+                            bottom: 16,
+                            right: 16,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: Colors.black.withOpacity(0.1),
+                                    blurRadius: 8,
+                                    spreadRadius: 1,
+                                  ),
+                                ],
+                              ),
+                              child: IconButton(
+                                icon: const Icon(Icons.my_location, color: Colors.black),
+                                onPressed: _getCurrentLocation,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    // Category filters
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 16),
+                      child: SizedBox(
+                        height: 40,
+                        child: ListView.builder(
+                          scrollDirection: Axis.horizontal,
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          itemCount: _categories.length,
+                          itemBuilder: (context, index) {
+                            final category = _categories[index];
+                            final isSelected = category == _selectedCategory;
+
+                            return GestureDetector(
+                              onTap: () {
+                                setState(() {
+                                  _selectedCategory = category;
+                                  _createMarkers();
+                                });
+                              },
+                              child: Container(
+                                margin: const EdgeInsets.only(right: 12),
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                decoration: BoxDecoration(
+                                  color: isSelected
+                                      ? const Color(0xFF00704A).withOpacity(0.1)
+                                      : themeProvider.isDarkMode
+                                          ? Colors.grey[800]
+                                          : Colors.grey[200],
+                                  borderRadius: BorderRadius.circular(20),
+                                  border: isSelected
+                                      ? Border.all(color: const Color(0xFF00704A))
+                                      : null,
+                                ),
+                                alignment: Alignment.center,
+                                child: Text(
+                                  category,
+                                  style: TextStyle(
+                                    color: isSelected
+                                        ? const Color(0xFF00704A)
+                                        : themeProvider.getSecondaryTextColor(),
+                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                    ),
+                    // Danusers list
+                    Expanded(
+                      child: () {
+                        final danusersToShow = _isSearching ? _searchResults : _filteredDanusers;
+                        
+                        if (danusersToShow.isEmpty) {
+                          return Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.person_search,
+                                  size: 64,
+                                  color: themeProvider.getSecondaryTextColor(),
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  _isSearching ? 'No search results found' : 'No danusers found',
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    color: themeProvider.getTextColor(),
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _isSearching 
+                                      ? 'Try searching with different keywords'
+                                      : 'Try changing your filter or check back later',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: themeProvider.getSecondaryTextColor(),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }
+                        
+                        return ListView.builder(
+                          controller: _scrollController,
+                          padding: const EdgeInsets.only(left: 16, right: 16, bottom: 80),
+                          itemCount: danusersToShow.length,
+                          itemBuilder: (context, index) {
+                            final danuser = danusersToShow[index];
+                            final isSelected = danuser.id == _selectedDanuserId;
+
+                            return GestureDetector(
+                              onTap: () {
+                                _selectDanuser(danuser.id);
+                                if (danuser.location != null) {
+                                  _animateToLocation(
+                                    latlng.LatLng(danuser.location!.lat, danuser.location!.lon),
+                                  );
+                                }
+                              },
+                              child: _buildDanuserCard(danuser, themeProvider, isSelected),
+                            );
+                          },
+                        );
+                      }(),
+                    ),
                   ],
                 ),
-                // Back button
-                Positioned(
-                  top: 16,
-                  left: 16,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 8,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.arrow_back, color: Colors.black),
-                      onPressed: () => Navigator.pop(context),
-                    ),
-                  ),
-                ),
-                // Search button
-                Positioned(
-                  top: 16,
-                  right: 16,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 8,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.search, color: Colors.black),
-                      onPressed: () {
-                        // Show search dialog
-                      },
-                    ),
-                  ),
-                ),
-                // My location button
-                Positioned(
-                  bottom: 16,
-                  right: 16,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withOpacity(0.1),
-                          blurRadius: 8,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                    child: IconButton(
-                      icon: const Icon(Icons.my_location, color: Colors.black),
-                      onPressed: _getCurrentLocation,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          // Category filters
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 16),
-            child: SizedBox(
-              height: 40,
-              child: ListView.builder(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                itemCount: _categories.length,
-                itemBuilder: (context, index) {
-                  final category = _categories[index];
-                  final isSelected = category == _selectedCategory;
-
-                  return GestureDetector(
-                    onTap: () {
-                      setState(() {
-                        _selectedCategory = category;
-                      });
-                    },
-                    child: Container(
-                      margin: const EdgeInsets.only(right: 12),
-                      padding: const EdgeInsets.symmetric(horizontal: 16),
-                      decoration: BoxDecoration(
-                        color: isSelected
-                            ? const Color(0xFF00704A).withOpacity(0.1)
-                            : themeProvider.isDarkMode
-                                ? Colors.grey[800]
-                                : Colors.grey[200],
-                        borderRadius: BorderRadius.circular(20),
-                        border: isSelected
-                            ? Border.all(color: const Color(0xFF00704A))
-                            : null,
-                      ),
-                      alignment: Alignment.center,
-                      child: Text(
-                        category,
-                        style: TextStyle(
-                          color: isSelected
-                              ? const Color(0xFF00704A)
-                              : themeProvider.getSecondaryTextColor(),
-                          fontWeight:
-                              isSelected ? FontWeight.bold : FontWeight.normal,
-                        ),
-                      ),
-                    ),
-                  );
-                },
-              ),
-            ),
-          ),
-          // Restaurant list
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.only(left: 16, right: 16, bottom: 80),
-              itemCount: _filteredRestaurants.length,
-              itemBuilder: (context, index) {
-                final restaurant = _filteredRestaurants[index];
-                final isSelected = restaurant['id'] == _selectedRestaurantId;
-
-                return GestureDetector(
-                  onTap: () {
-                    _selectRestaurant(restaurant['id'] as String);
-                    _animateToLocation(restaurant['location'] as latlng.LatLng);
-                  },
-                  child: _buildRestaurantCard(restaurant, themeProvider, isSelected),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
       bottomNavigationBar: DanusinBottomNavigationBar(
         currentIndex: 1,
         onTap: (index) => navigateToMainScreen(context, index),
@@ -496,7 +684,13 @@ class _MapViewScreenState extends State<MapViewScreen> {
         desiredAccuracy: LocationAccuracy.high,
       );
       final location = latlng.LatLng(position.latitude, position.longitude);
+      
+      setState(() {
+        _currentLocation = location;
+      });
+      
       _animateToLocation(location);
+      _createMarkers(); // Recreate markers to include current location
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -506,8 +700,7 @@ class _MapViewScreenState extends State<MapViewScreen> {
     }
   }
 
-  Widget _buildRestaurantCard(
-      Map<String, dynamic> restaurant, ThemeProvider themeProvider, bool isSelected) {
+  Widget _buildDanuserCard(DanusinUser danuser, ThemeProvider themeProvider, bool isSelected) {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
@@ -528,168 +721,187 @@ class _MapViewScreenState extends State<MapViewScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Restaurant image
+          // Danuser image
           ClipRRect(
             borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(10),
-              bottomLeft: Radius.circular(10),
+              topLeft: Radius.circular(12),
+              bottomLeft: Radius.circular(12),
             ),
-            child: SizedBox(
+            child: Container(
               width: 100,
               height: 100,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  Image.asset(
-                    restaurant['image'] ?? 'assets/images/placeholder.jpg',
-                    fit: BoxFit.cover,
-                  ),
-                  Positioned(
-                    bottom: 8,
-                    left: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.7),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.access_time, color: Colors.white, size: 12),
-                          const SizedBox(width: 2),
-                          Text(
-                            restaurant['deliveryTime'],
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  Positioned(
-                    top: 8,
-                    right: 8,
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF00704A),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: Text(
-                        restaurant['rating'].toString(),
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 12,
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+              decoration: BoxDecoration(
+                color: themeProvider.isDarkMode ? Colors.grey[800] : Colors.grey[200],
               ),
+              child: danuser.avatar != null && danuser.avatar!.isNotEmpty
+                  ? Image.network(
+                      danuser.getAvatarUrl(PocketBaseService.baseUrl),
+                      fit: BoxFit.cover,
+                      errorBuilder: (context, error, stackTrace) => Icon(
+                        Icons.person,
+                        color: themeProvider.getSecondaryTextColor(),
+                        size: 40,
+                      ),
+                    )
+                  : Icon(
+                      Icons.person,
+                      color: themeProvider.getSecondaryTextColor(),
+                      size: 40,
+                    ),
             ),
           ),
           const SizedBox(width: 16),
-          // Restaurant details
+          // Danuser details
           Expanded(
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 12),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // Restaurant name
-                  Text(
-                    restaurant['name'],
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                      color: themeProvider.getTextColor(),
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  // Restaurant address
-                  Text(
-                    restaurant['address'],
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: themeProvider.getSecondaryTextColor(),
-                    ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 4),
-                  // Restaurant cuisines
+                  // Danuser name
                   Row(
                     children: [
-                      ...List.generate(
-                        restaurant['cuisines'].length > 2
-                            ? 2
-                            : restaurant['cuisines'].length,
-                        (index) => Text(
-                          '${index > 0 ? ' • ' : ''}${restaurant['cuisines'][index]}',
+                      Expanded(
+                        child: Text(
+                          danuser.name,
                           style: TextStyle(
-                            fontSize: 14,
-                            color: themeProvider.getSecondaryTextColor(),
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: themeProvider.getTextColor(),
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (danuser.verified)
+                        Icon(
+                          Icons.verified,
+                          size: 16,
+                          color: themeProvider.getPrimaryColor(),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  // Bio
+                  if (danuser.bio != null && danuser.bio!.isNotEmpty)
+                    Text(
+                      danuser.bio!,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: themeProvider.getSecondaryTextColor(),
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  const SizedBox(height: 8),
+                  // Location and rating
+                  Row(
+                    children: [
+                      if (danuser.locationAddress != null) ...[
+                        Icon(
+                          Icons.location_on_outlined,
+                          size: 14,
+                          color: themeProvider.getSecondaryTextColor(),
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            danuser.locationAddress!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: themeProvider.getSecondaryTextColor(),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00704A),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Row(
+                          children: [
+                            Text(
+                              '4.5',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                              ),
+                            ),
+                            SizedBox(width: 2),
+                            Icon(
+                              Icons.star,
+                              color: Colors.white,
+                              size: 12,
+                            ),
+                          ],
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
-                  // Free delivery
-                  if (restaurant['freeDelivery'])
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.monetization_on_outlined,
-                          size: 16,
-                          color: themeProvider.getSecondaryTextColor(),
-                        ),
-                        const SizedBox(width: 4),
-                        Text(
-                          'Free delivery',
-                          style: TextStyle(
-                            fontSize: 14,
-                            color: themeProvider.getSecondaryTextColor(),
-                          ),
-                        ),
-                      ],
-                    ),
                 ],
               ),
             ),
           ),
-          // View button
+          // Action buttons
           Padding(
             padding: const EdgeInsets.all(12),
-            child: IconButton(
-              icon: Icon(
-                Icons.arrow_forward_ios,
-                size: 16,
-                color: themeProvider.getSecondaryTextColor(),
-              ),
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) =>
-                        RestaurantDetailScreen(restaurant: restaurant),
+            child: Column(
+              children: [
+                ElevatedButton(
+                  onPressed: () {
+                    Navigator.push(
+                      context,
+                      MaterialPageRoute(
+                        builder: (context) => DanuserDetailScreen(danuser: danuser),
+                      ),
+                    );
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: themeProvider.getPrimaryColor(),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
                   ),
-                );
-              },
+                  child: Text(
+                    'View',
+                    style: TextStyle(
+                      color: themeProvider.isDarkMode ? Colors.black : Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton(
+                  onPressed: () => _contactDanuser(danuser),
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(color: const Color(0xFF25D366)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                  ),
+                  child: const Text(
+                    'Chat',
+                    style: TextStyle(
+                      color: Color(0xFF25D366),
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ],
       ),
     );
-  }
-}
-
-// Extension to check if any items exist in the list
-extension ListFilterExtension<T> on List<T> {
-  bool containsAny(List<T> items) {
-    return any((element) => items.contains(element));
   }
 }

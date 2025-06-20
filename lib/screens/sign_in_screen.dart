@@ -1,16 +1,33 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:provider/provider.dart';
-import 'package:pocketbase/pocketbase.dart';
-import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../theme_provider.dart';
+import '../widgets/theme_switch_button.dart';
+import '../services/pocketbase_service.dart';
 import 'sign_up_screen.dart';
 import 'forgot_password_screen.dart';
 import 'first_page_screen.dart';
-import '../theme_provider.dart';
-import '../widgets/theme_switch_button.dart';
 
-// Initialize PocketBase with your server URL
-final pb = PocketBase('https://pocketbase.evoptech.com');
+// Guest mode management
+class GuestModeManager {
+  static const String _guestModeKey = 'isGuestMode';
+  
+  static Future<void> setGuestMode(bool isGuest) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_guestModeKey, isGuest);
+  }
+  
+  static Future<bool> isGuestMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_guestModeKey) ?? false;
+  }
+  
+  static Future<void> clearGuestMode() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_guestModeKey);
+  }
+}
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({Key? key}) : super(key: key);
@@ -33,7 +50,6 @@ class _SignInScreenState extends State<SignInScreen> {
     super.dispose();
   }
 
-  // Handle email/password login with PocketBase
   Future<void> _signIn() async {
     setState(() {
       _isLoading = true;
@@ -41,17 +57,14 @@ class _SignInScreenState extends State<SignInScreen> {
     });
 
     try {
-      // Authenticate with PocketBase
-      final authData = await pb
-          .collection('danusin_users')
-          .authWithPassword(_emailController.text.trim(), _passwordController.text);
+      final user = await PocketBaseService.signIn(
+        _emailController.text.trim(),
+        _passwordController.text,
+      );
 
-      // Store authentication data
-      if (pb.authStore.isValid) {
-        // Update user profile data
-        await _updateUserProfile(authData.record);
+      if (user != null) {
+        await GuestModeManager.setGuestMode(false);
         
-        // Navigate to FirstPageScreen
         if (mounted) {
           Navigator.pushReplacement(
             context,
@@ -63,14 +76,9 @@ class _SignInScreenState extends State<SignInScreen> {
           _errorMessage = 'Authentication failed. Please try again.';
         });
       }
-    } on ClientException catch (e) {
-      setState(() {
-        _errorMessage = e.response['message']?.toString() ??
-            'Invalid email or password.';
-      });
     } catch (e) {
       setState(() {
-        _errorMessage = 'An error occurred: $e';
+        _errorMessage = e.toString().replaceAll('Exception: Failed to sign in: ', '');
       });
     } finally {
       setState(() {
@@ -79,69 +87,30 @@ class _SignInScreenState extends State<SignInScreen> {
     }
   }
 
-  // Handle Google OAuth2 login
-  Future<void> _signInWithGoogle() async {
+  Future<void> _signInAsGuest() async {
     setState(() {
       _isLoading = true;
       _errorMessage = null;
     });
-
+    
     try {
-      // Authenticate with Google OAuth2
-      final authData = await pb.collection('danusin_users').authWithOAuth2(
-        'google',
-        (url) async {
-          if (!await launchUrl(url, mode: LaunchMode.externalApplication)) {
-            throw 'Could not launch Google login page';
-          }
-        },
-      );
-
-      if (pb.authStore.isValid) {
-        // Update user profile data
-        await _updateUserProfile(authData.record);
-
-        // Navigate to FirstPageScreen
-        if (mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => const FirstPageScreen()),
-          );
-        }
-      } else {
-        setState(() {
-          _errorMessage = 'Google authentication failed.';
-        });
+      PocketBaseService.signOut();
+      await GuestModeManager.setGuestMode(true);
+      
+      if (mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const FirstPageScreen()),
+        );
       }
-    } on ClientException catch (e) {
-      setState(() {
-        _errorMessage = e.response['message']?.toString() ??
-            'Failed to sign in with Google.';
-      });
     } catch (e) {
       setState(() {
-        _errorMessage = 'An error occurred: $e';
+        _errorMessage = 'Failed to enter guest mode: $e';
       });
     } finally {
       setState(() {
         _isLoading = false;
       });
-    }
-  }
-
-  // Update user profile data after authentication
-  Future<void> _updateUserProfile(RecordModel? record) async {
-    if (record == null) return;
-
-    try {
-      // Ensure the user record is up-to-date
-      final user = await pb.collection('danusin_users').getOne(record.id);
-      
-      // Update auth store with the latest record
-      pb.authStore.save(pb.authStore.token, user);
-    } catch (e) {
-      // Log error but don't block sign-in
-      debugPrint('Failed to update user profile: $e');
     }
   }
 
@@ -162,26 +131,21 @@ class _SignInScreenState extends State<SignInScreen> {
                     Container(
                       height: 200,
                       decoration: BoxDecoration(
-                        image: DecorationImage(
-                          image: const AssetImage('../assets/images/donuts.png'),
+                        color: themeProvider.getPrimaryColor(),
+                        image: const DecorationImage(
+                          image: AssetImage('/images/donuts.png'),
                           fit: BoxFit.cover,
-                          colorFilter: themeProvider.isDarkMode
-                              ? ColorFilter.mode(
-                                  Colors.black.withOpacity(0.5),
-                                  BlendMode.darken,
-                                )
-                              : null,
+                          opacity: 0.3,
                         ),
                       ),
                     ),
                     Container(
                       height: 200,
                       alignment: Alignment.center,
-                      color: Colors.black.withOpacity(0.1),
                       child: Text(
                         'DANUSIN',
                         style: TextStyle(
-                          color: themeProvider.getPrimaryColor(),
+                          color: themeProvider.isDarkMode ? Colors.white : Colors.white,
                           fontSize: 36,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 1.2,
@@ -215,9 +179,17 @@ class _SignInScreenState extends State<SignInScreen> {
                       if (_errorMessage != null)
                         Padding(
                           padding: const EdgeInsets.only(bottom: 16),
-                          child: Text(
-                            _errorMessage!,
-                            style: const TextStyle(color: Colors.red, fontSize: 14),
+                          child: Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: Colors.red.withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: Colors.red.withOpacity(0.3)),
+                            ),
+                            child: Text(
+                              _errorMessage!,
+                              style: const TextStyle(color: Colors.red, fontSize: 14),
+                            ),
                           ),
                         ),
                       TextField(
@@ -226,12 +198,9 @@ class _SignInScreenState extends State<SignInScreen> {
                         style: TextStyle(color: themeProvider.getTextColor()),
                         decoration: InputDecoration(
                           hintText: 'Email Address',
-                          hintStyle:
-                              TextStyle(color: themeProvider.getSecondaryTextColor()),
+                          hintStyle: TextStyle(color: themeProvider.getSecondaryTextColor()),
                           filled: true,
-                          fillColor: themeProvider.isDarkMode
-                              ? Colors.grey[800]
-                              : Colors.grey[100],
+                          fillColor: themeProvider.isDarkMode ? Colors.grey[800] : Colors.grey[100],
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: BorderSide.none,
@@ -249,12 +218,9 @@ class _SignInScreenState extends State<SignInScreen> {
                         style: TextStyle(color: themeProvider.getTextColor()),
                         decoration: InputDecoration(
                           hintText: 'Password',
-                          hintStyle:
-                              TextStyle(color: themeProvider.getSecondaryTextColor()),
+                          hintStyle: TextStyle(color: themeProvider.getSecondaryTextColor()),
                           filled: true,
-                          fillColor: themeProvider.isDarkMode
-                              ? Colors.grey[800]
-                              : Colors.grey[100],
+                          fillColor: themeProvider.isDarkMode ? Colors.grey[800] : Colors.grey[100],
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(8),
                             borderSide: BorderSide.none,
@@ -265,9 +231,7 @@ class _SignInScreenState extends State<SignInScreen> {
                           ),
                           suffixIcon: IconButton(
                             icon: Icon(
-                              _obscurePassword
-                                  ? Icons.visibility_off
-                                  : Icons.visibility,
+                              _obscurePassword ? Icons.visibility_off : Icons.visibility,
                               color: themeProvider.getSecondaryTextColor(),
                             ),
                             onPressed: () {
@@ -311,17 +275,15 @@ class _SignInScreenState extends State<SignInScreen> {
                               ),
                             ),
                             child: _isLoading
-                                ? const CircularProgressIndicator(
-                                    color: Colors.white,
+                                ? CircularProgressIndicator(
+                                    color: themeProvider.isDarkMode ? Colors.black : Colors.white,
                                   )
                                 : Text(
                                     'Sign In',
                                     style: TextStyle(
                                       fontSize: 18,
                                       fontWeight: FontWeight.bold,
-                                      color: themeProvider.isDarkMode
-                                          ? Colors.black
-                                          : Colors.white,
+                                      color: themeProvider.isDarkMode ? Colors.black : Colors.white,
                                     ),
                                   ),
                           ),
@@ -349,84 +311,38 @@ class _SignInScreenState extends State<SignInScreen> {
                         ],
                       ),
                       const SizedBox(height: 24),
-                      Row(
-                        children: [
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: _isLoading ? null : _signInWithGoogle,
-                              style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                                side: BorderSide(
-                                  color: themeProvider.isDarkMode
-                                      ? Colors.grey[700]!
-                                      : Colors.grey[300]!,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                ),
-                              ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Image.asset(
-                                    '../assets/images/google_logo.png',
-                                    height: 24,
-                                    width: 24,
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Google',
-                                    style: TextStyle(
-                                      color: themeProvider.getTextColor(),
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton(
+                          onPressed: _isLoading ? null : _signInAsGuest,
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            side: BorderSide(
+                              color: themeProvider.isDarkMode ? Colors.grey[700]! : Colors.grey[300]!,
+                            ),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
                             ),
                           ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: OutlinedButton(
-                              onPressed: _isLoading
-                                  ? null
-                                  : () {
-                                      setState(() {
-                                        _errorMessage = 'Guest login not implemented.';
-                                      });
-                                    },
-                              style: OutlinedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(vertical: 12),
-                                side: BorderSide(
-                                  color: themeProvider.isDarkMode
-                                      ? Colors.grey[700]!
-                                      : Colors.grey[300]!,
-                                ),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(8),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.person_outline,
+                                size: 24,
+                                color: themeProvider.getTextColor(),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Continue as Guest',
+                                style: TextStyle(
+                                  color: themeProvider.getTextColor(),
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(
-                                    Icons.person_outline,
-                                    size: 24,
-                                    color: themeProvider.getTextColor(),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    'Guest',
-                                    style: TextStyle(
-                                      color: themeProvider.getTextColor(),
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
+                            ],
                           ),
-                        ],
+                        ),
                       ),
                       const SizedBox(height: 32),
                       Center(

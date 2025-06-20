@@ -1,0 +1,70 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "danusin-flutter (default)",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "danusin-flutter (profile mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "danusin-flutter (release mode)",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        },
+        {
+            "name": "danusin-flutter (web - chrome)",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "chrome",
+            "flutterMode": "debug"
+        },
+        {
+            "name": "danusin-flutter (web - chrome profile mode)",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "chrome",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "danusin-flutter (web - chrome release mode)",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "chrome",
+            "flutterMode": "release"
+        },
+        {
+            "name": "danusin-flutter (web-server)",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "web-server",
+            "flutterMode": "debug",
+            "args": ["--web-port=8888"]
+        },
+        {
+            "name": "danusin-flutter (web-server profile mode)",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "web-server",
+            "flutterMode": "profile",
+            "args": ["--web-port=8888"]
+        },
+        {
+            "name": "danusin-flutter (web-server release mode)",
+            "request": "launch",
+            "type": "dart",
+            "deviceId": "web-server",
+            "flutterMode": "release",
+            "args": ["--web-port=8888"]
+        }
+    ]
+}

@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:pocketbase/pocketbase.dart';
 import 'package:provider/provider.dart';
 import '../theme_provider.dart';
 import '../widgets/bottom_navigation_bar.dart';
 import '../widgets/theme_switch_button.dart';
+import '../services/pocketbase_service.dart';
+import '../models/danusin_user.dart';
+import 'edit_profile_screen.dart';
+import 'sign_in_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -13,11 +16,7 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  // PocketBase instance
-  final pb = PocketBase('https://pocketbase.evoptech.com');
-
-  // User data
-  Map<String, dynamic>? _userData;
+  DanusinUser? _userData;
   bool _isLoading = true;
   String? _errorMessage;
 
@@ -27,7 +26,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _fetchUserData();
   }
 
-  // Fetch user data from PocketBase
   Future<void> _fetchUserData() async {
     setState(() {
       _isLoading = true;
@@ -35,47 +33,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
     });
 
     try {
-      if (!pb.authStore.isValid) {
+      if (!PocketBaseService.isAuthenticated) {
         throw Exception('User not authenticated. Please log in.');
       }
 
-      // Fetch the authenticated user's record
-      final user = await pb.collection('danusin_users').getOne(pb.authStore.model.id);
-      setState(() {
-        _userData = {
-          'id': user.id,
-          'name': user.data['name'] ?? 'Unknown User',
-          'email': user.data['email'] ?? '',
-          'avatar': user.data['avatar'] != null
-              ? '${pb.baseUrl}/api/files/danusin_users/${user.id}/${user.data['avatar']}'
-              : null,
-          'language': user.data['language'] ?? 'English',
-          'addresses': user.data['addresses'] ?? [],
-          'payment_methods': user.data['payment_methods'] ?? [],
-        };
-        _isLoading = false;
-      });
-    } catch (e) {
-      String errorDetail = e.toString();
-      if (e is ClientException) {
-        errorDetail = 'HTTP ${e.statusCode}: ${e.response['message'] ?? e.toString()}';
-        if (e.statusCode == 403) {
-          errorDetail += '\nCheck collection rules in PocketBase admin UI.';
-        }
+      final user = PocketBaseService.currentUser;
+      if (user != null) {
+        // Fetch fresh user data
+        final freshUser = await PocketBaseService.getUser(user.id);
+        setState(() {
+          _userData = freshUser;
+          _isLoading = false;
+        });
+      } else {
+        throw Exception('No user data available');
       }
+    } catch (e) {
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load profile: $errorDetail';
+        _errorMessage = 'Failed to load profile: $e';
       });
     }
   }
 
-  // Sign out the user
   Future<void> _signOut() async {
     try {
-      pb.authStore.clear();
-      // Navigate to login screen
-      // ignore: use_build_context_synchronously
+      PocketBaseService.signOut();
       Navigator.pushReplacementNamed(context, '/login');
     } catch (e) {
       setState(() {
@@ -149,12 +132,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           children: [
                             CircleAvatar(
                               radius: 50,
-                              backgroundColor:
-                                  themeProvider.getPrimaryColor().withOpacity(0.2),
-                              backgroundImage: _userData!['avatar'] != null
-                                  ? NetworkImage(_userData!['avatar'])
+                              backgroundColor: themeProvider.getPrimaryColor().withOpacity(0.2),
+                              backgroundImage: _userData!.avatar != null && _userData!.avatar!.isNotEmpty
+                                  ? NetworkImage(_userData!.getAvatarUrl(PocketBaseService.baseUrl))
                                   : null,
-                              child: _userData!['avatar'] == null
+                              child: _userData!.avatar == null || _userData!.avatar!.isEmpty
                                   ? Icon(
                                       Icons.person,
                                       size: 60,
@@ -164,7 +146,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                             const SizedBox(height: 16),
                             Text(
-                              _userData!['name'],
+                              _userData!.name,
                               style: TextStyle(
                                 fontSize: 24,
                                 fontWeight: FontWeight.bold,
@@ -173,23 +155,47 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              _userData!['email'],
+                              _userData!.email,
                               style: TextStyle(
                                 fontSize: 16,
                                 color: themeProvider.getSecondaryTextColor(),
                               ),
                             ),
+                            if (_userData!.username != null) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                '@${_userData!.username}',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: themeProvider.getSecondaryTextColor(),
+                                ),
+                              ),
+                            ],
                             const SizedBox(height: 8),
+                            if (_userData!.isDanuser)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: themeProvider.getPrimaryColor(),
+                                  borderRadius: BorderRadius.circular(20),
+                                ),
+                                child: Text(
+                                  'Danuser',
+                                  style: TextStyle(
+                                    color: themeProvider.isDarkMode ? Colors.black : Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            const SizedBox(height: 16),
                             OutlinedButton(
                               onPressed: () {
-                                // Navigate to EditProfileScreen
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (context) =>
-                                        EditProfileScreen(userData: _userData!),
+                                    builder: (context) => EditProfileScreen(userData: _userData!),
                                   ),
-                                ).then((_) => _fetchUserData()); // Refresh after edit
+                                ).then((_) => _fetchUserData());
                               },
                               style: OutlinedButton.styleFrom(
                                 side: BorderSide(color: themeProvider.getPrimaryColor()),
@@ -218,13 +224,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           _buildSettingsItem(
                             icon: Icons.person_outline,
                             title: 'Personal Information',
+                            subtitle: _userData!.bio ?? 'Add your bio',
                             themeProvider: themeProvider,
                             onTap: () {
                               Navigator.push(
                                 context,
                                 MaterialPageRoute(
-                                  builder: (context) =>
-                                      EditProfileScreen(userData: _userData!),
+                                  builder: (context) => EditProfileScreen(userData: _userData!),
                                 ),
                               ).then((_) => _fetchUserData());
                             },
@@ -232,90 +238,59 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           _buildDivider(themeProvider),
                           _buildSettingsItem(
                             icon: Icons.notifications_outlined,
-                            title: 'Notifications',
+                            title: 'Email Notifications',
+                            subtitle: _userData!.emailNotifications ? 'Enabled' : 'Disabled',
                             themeProvider: themeProvider,
                           ),
                           _buildDivider(themeProvider),
                           _buildSettingsItem(
-                            icon: Icons.language_outlined,
-                            title: 'Language',
-                            subtitle: _userData!['language'],
+                            icon: Icons.email_outlined,
+                            title: 'Marketing Emails',
+                            subtitle: _userData!.marketingEmails ? 'Enabled' : 'Disabled',
+                            themeProvider: themeProvider,
+                          ),
+                          _buildDivider(themeProvider),
+                          _buildSettingsItem(
+                            icon: Icons.location_on_outlined,
+                            title: 'Location',
+                            subtitle: _userData!.locationAddress ?? 'Add your location',
                             themeProvider: themeProvider,
                           ),
                         ],
                       ),
                       const SizedBox(height: 24),
 
-                      // Payment methods section
-                      _buildSectionTitle('Payment Methods', themeProvider),
-                      const SizedBox(height: 8),
-                      _buildSettingsCard(
-                        themeProvider,
-                        children: _userData!['payment_methods'].isNotEmpty
-                            ? _userData!['payment_methods'].asMap().entries.map<Widget>(
-                                (entry) {
-                                  final method = entry.value;
-                                  return Column(
-                                    children: [
-                                      _buildSettingsItem(
-                                        icon: method['type'] == 'Credit Card'
-                                            ? Icons.credit_card_outlined
-                                            : Icons.account_balance_wallet_outlined,
-                                        title:
-                                            '${method['type']} ${method['last_four'] ?? method['name'] ?? ''}',
-                                        themeProvider: themeProvider,
-                                      ),
-                                      if (entry.key <
-                                          _userData!['payment_methods'].length - 1)
-                                        _buildDivider(themeProvider),
-                                    ],
-                                  );
-                                },
-                              ).toList()
-                            : [
-                                _buildSettingsItem(
-                                  icon: Icons.add_circle_outline,
-                                  title: 'Add Payment Method',
-                                  themeProvider: themeProvider,
-                                ),
-                              ],
-                      ),
-                      const SizedBox(height: 24),
-
-                      // Addresses section
-                      _buildSectionTitle('Addresses', themeProvider),
-                      const SizedBox(height: 8),
-                      _buildSettingsCard(
-                        themeProvider,
-                        children: _userData!['addresses'].isNotEmpty
-                            ? _userData!['addresses'].asMap().entries.map<Widget>(
-                                (entry) {
-                                  final address = entry.value;
-                                  return Column(
-                                    children: [
-                                      _buildSettingsItem(
-                                        icon: address['type'] == 'Home'
-                                            ? Icons.home_outlined
-                                            : Icons.work_outline,
-                                        title: address['type'],
-                                        subtitle: address['address'],
-                                        themeProvider: themeProvider,
-                                      ),
-                                      if (entry.key < _userData!['addresses'].length - 1)
-                                        _buildDivider(themeProvider),
-                                    ],
-                                  );
-                                },
-                              ).toList()
-                            : [
-                                _buildSettingsItem(
-                                  icon: Icons.add_circle_outline,
-                                  title: 'Add New Address',
-                                  themeProvider: themeProvider,
-                                ),
-                              ],
-                      ),
-                      const SizedBox(height: 24),
+                      // Danuser section (if user is a danuser)
+                      if (_userData!.isDanuser) ...[
+                        _buildSectionTitle('Danuser Settings', themeProvider),
+                        const SizedBox(height: 8),
+                        _buildSettingsCard(
+                          themeProvider,
+                          children: [
+                            _buildSettingsItem(
+                              icon: Icons.store_outlined,
+                              title: 'My Products',
+                              subtitle: 'Manage your products',
+                              themeProvider: themeProvider,
+                            ),
+                            _buildDivider(themeProvider),
+                            _buildSettingsItem(
+                              icon: Icons.analytics_outlined,
+                              title: 'Analytics',
+                              subtitle: 'View your performance',
+                              themeProvider: themeProvider,
+                            ),
+                            _buildDivider(themeProvider),
+                            _buildSettingsItem(
+                              icon: Icons.phone_outlined,
+                              title: 'Contact Number',
+                              subtitle: _userData!.phone ?? 'Add phone number',
+                              themeProvider: themeProvider,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 24),
+                      ],
 
                       // Support section
                       _buildSectionTitle('Support', themeProvider),
@@ -459,25 +434,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
       height: 1,
       indent: 56,
       endIndent: 16,
-    );
-  }
-}
-
-// Placeholder EditProfileScreen
-class EditProfileScreen extends StatelessWidget {
-  final Map<String, dynamic> userData;
-
-  const EditProfileScreen({Key? key, required this.userData}) : super(key: key);
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Edit Profile'),
-      ),
-      body: Center(
-        child: Text('Edit Profile for ${userData['name']} (Placeholder)'),
-      ),
     );
   }
 }

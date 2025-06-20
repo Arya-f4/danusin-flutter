@@ -36,9 +36,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
   ];
 
   List<String> images = [
+    '../assets/images/logo-danusin-hijau.png',
     '../assets/images/burger.png',
-    '../assets/images/burger.png',
-    '../assets/images/burger.png',
+    '../assets/images/logo-danusin-hijau.png',
   ];
 
   @override

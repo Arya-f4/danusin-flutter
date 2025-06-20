@@ -1,46 +1,53 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../theme_provider.dart';
-import 'restaurant_detail_screen.dart';
+import '../services/pocketbase_service.dart';
+import '../models/danusin_user.dart';
+import 'danuser_detail_screen.dart';
+import '../widgets/bottom_navigation_bar.dart';
 
-class FeaturedPartnersScreen extends StatelessWidget {
+class FeaturedPartnersScreen extends StatefulWidget {
   const FeaturedPartnersScreen({Key? key}) : super(key: key);
 
-  // Mock data for featured partners
-  final List<Map<String, dynamic>> _featuredPartners = const [
-    {
-      'name': 'Tacos Nanchas',
-      'image': 'assets/images/tacos.jpg',
-      'rating': 4.5,
-      'deliveryTime': '25min',
-      'freeDelivery': true,
-      'cuisines': ['Chinese', 'American'],
-    },
-    {
-      'name': 'McDonald\'s',
-      'image': 'assets/images/mcdonalds.jpg',
-      'rating': 4.5,
-      'deliveryTime': '25min',
-      'freeDelivery': true,
-      'cuisines': ['Chinese', 'American'],
-    },
-    {
-      'name': 'KFC Foods',
-      'image': 'assets/images/kfc.jpg',
-      'rating': 4.5,
-      'deliveryTime': '30min',
-      'freeDelivery': true,
-      'cuisines': ['Chinese', 'American'],
-    },
-    {
-      'name': 'Cafe MayField\'s',
-      'image': 'assets/images/cafe.jpg',
-      'rating': 4.5,
-      'deliveryTime': '25min',
-      'freeDelivery': true,
-      'cuisines': ['Chinese', 'American'],
-    },
-  ];
+  @override
+  _FeaturedPartnersScreenState createState() => _FeaturedPartnersScreenState();
+}
+
+class _FeaturedPartnersScreenState extends State<FeaturedPartnersScreen> {
+  List<DanusinUser> _featuredPartners = [];
+  bool _isLoading = true;
+  String? _errorMessage;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchFeaturedPartners();
+  }
+
+  Future<void> _fetchFeaturedPartners() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final partners = await PocketBaseService.getUsers(
+        filter: 'isdanuser = true',
+        sort: '-created',
+        perPage: 20,
+      );
+      
+      setState(() {
+        _featuredPartners = partners;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Failed to load featured partners: $e';
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -56,7 +63,7 @@ class FeaturedPartnersScreen extends StatelessWidget {
           onPressed: () => Navigator.pop(context),
         ),
         title: Text(
-          'Featured Partners',
+          'Featured Danusers',
           style: TextStyle(
             color: themeProvider.getTextColor(),
             fontWeight: FontWeight.bold,
@@ -64,91 +71,131 @@ class FeaturedPartnersScreen extends StatelessWidget {
         ),
         centerTitle: true,
       ),
-      body: GridView.builder(
-        padding: const EdgeInsets.all(16),
-        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-          crossAxisCount: 2,
-          childAspectRatio: 0.75,
-          crossAxisSpacing: 16,
-          mainAxisSpacing: 16,
-        ),
-        itemCount: _featuredPartners.length,
-        itemBuilder: (context, index) {
-          final restaurant = _featuredPartners[index];
-          return GestureDetector(
-            onTap: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (context) => RestaurantDetailScreen(restaurant: restaurant),
-                ),
-              );
-            },
-            child: _buildRestaurantCard(restaurant, themeProvider),
-          );
-        },
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _errorMessage != null
+              ? Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        _errorMessage!,
+                        style: TextStyle(color: themeProvider.getTextColor()),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 16),
+                      ElevatedButton(
+                        onPressed: _fetchFeaturedPartners,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                )
+              : _featuredPartners.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(
+                            Icons.person_search,
+                            size: 64,
+                            color: themeProvider.getSecondaryTextColor(),
+                          ),
+                          const SizedBox(height: 16),
+                          Text(
+                            'No featured danusers available',
+                            style: TextStyle(
+                              fontSize: 18,
+                              color: themeProvider.getTextColor(),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : GridView.builder(
+                      padding: const EdgeInsets.all(16),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        childAspectRatio: 0.75,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                      ),
+                      itemCount: _featuredPartners.length,
+                      itemBuilder: (context, index) {
+                        final danuser = _featuredPartners[index];
+                        return GestureDetector(
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => DanuserDetailScreen(danuser: danuser),
+                              ),
+                            );
+                          },
+                          child: _buildDanuserCard(danuser, themeProvider),
+                        );
+                      },
+                    ),
+      bottomNavigationBar: DanusinBottomNavigationBar(
+        currentIndex: 1,
+        onTap: (index) => navigateToMainScreen(context, index),
       ),
-      bottomNavigationBar: _buildBottomNavBar(themeProvider),
     );
   }
 
-  Widget _buildRestaurantCard(Map<String, dynamic> restaurant, ThemeProvider themeProvider) {
+  Widget _buildDanuserCard(DanusinUser danuser, ThemeProvider themeProvider) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Restaurant image
+        // Danuser image
         Expanded(
           child: ClipRRect(
             borderRadius: BorderRadius.circular(8),
             child: Stack(
               fit: StackFit.expand,
               children: [
-                Image.asset(
-                  restaurant['image'],
-                  fit: BoxFit.cover,
+                Container(
+                  decoration: BoxDecoration(
+                    color: themeProvider.isDarkMode ? Colors.grey[800] : Colors.grey[200],
+                  ),
+                  child: danuser.avatar != null && danuser.avatar!.isNotEmpty
+                      ? Image.network(
+                          danuser.getAvatarUrl(PocketBaseService.baseUrl),
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) => Icon(
+                            Icons.person,
+                            size: 50,
+                            color: themeProvider.getSecondaryTextColor(),
+                          ),
+                        )
+                      : Icon(
+                          Icons.person,
+                          size: 50,
+                          color: themeProvider.getSecondaryTextColor(),
+                        ),
                 ),
                 Positioned(
                   bottom: 8,
                   left: 8,
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.black.withOpacity(0.7),
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.access_time, color: Colors.white, size: 12),
-                            const SizedBox(width: 2),
-                            Text(
-                              restaurant['deliveryTime'],
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 10,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 4),
-                      if (restaurant['freeDelivery'])
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: Colors.black.withOpacity(0.7),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: const Text(
-                            'Free',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                            ),
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.7),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: const Row(
+                      children: [
+                        Icon(Icons.access_time, color: Colors.white, size: 12),
+                        SizedBox(width: 2),
+                        Text(
+                          'Online',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 10,
                           ),
                         ),
-                    ],
+                      ],
+                    ),
                   ),
                 ),
                 Positioned(
@@ -160,9 +207,9 @@ class FeaturedPartnersScreen extends StatelessWidget {
                       color: const Color(0xFF00704A),
                       borderRadius: BorderRadius.circular(4),
                     ),
-                    child: Text(
-                      restaurant['rating'].toString(),
-                      style: const TextStyle(
+                    child: const Text(
+                      '4.5',
+                      style: TextStyle(
                         color: Colors.white,
                         fontWeight: FontWeight.bold,
                         fontSize: 12,
@@ -175,9 +222,9 @@ class FeaturedPartnersScreen extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 8),
-        // Restaurant name
+        // Danuser name
         Text(
-          restaurant['name'],
+          danuser.name,
           style: TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.w500,
@@ -186,67 +233,17 @@ class FeaturedPartnersScreen extends StatelessWidget {
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
-        // Restaurant cuisines
-        Row(
-          children: [
-            ...List.generate(
-              restaurant['cuisines'].length > 2 ? 2 : restaurant['cuisines'].length,
-              (index) => Text(
-                '${index > 0 ? ' • ' : ''}${restaurant['cuisines'][index]}',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: themeProvider.getSecondaryTextColor(),
-                ),
-              ),
+        // Location
+        if (danuser.locationAddress != null)
+          Text(
+            danuser.locationAddress!,
+            style: TextStyle(
+              fontSize: 12,
+              color: themeProvider.getSecondaryTextColor(),
             ),
-          ],
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBottomNavBar(ThemeProvider themeProvider) {
-    return Container(
-      height: 56,
-      decoration: BoxDecoration(
-        color: themeProvider.isDarkMode ? Colors.black : Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 10,
-            spreadRadius: 0,
-            offset: const Offset(0, -5),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
           ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          _buildNavItem(Icons.home_outlined, 'Home', false, themeProvider),
-          _buildNavItem(Icons.search, 'Search', true, themeProvider),
-          _buildNavItem(Icons.receipt_long_outlined, 'Orders', false, themeProvider),
-          _buildNavItem(Icons.person_outline, 'Profile', false, themeProvider),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildNavItem(IconData icon, String label, bool isSelected, ThemeProvider themeProvider) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Icon(
-          icon,
-          color: isSelected ? const Color(0xFF00704A) : themeProvider.getSecondaryTextColor(),
-          size: 24,
-        ),
-        Text(
-          label,
-          style: TextStyle(
-            fontSize: 12,
-            color: isSelected ? const Color(0xFF00704A) : themeProvider.getSecondaryTextColor(),
-          ),
-        ),
       ],
     );
   }
